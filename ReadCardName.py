@@ -1,47 +1,68 @@
-import pytesseract
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Windows path
-
-
 import cv2
-import pytesseract
+import easyocr
 import numpy as np
 
+# Initialize EasyOCR
+reader = easyocr.Reader(['en'])
+
 def preprocess_image(frame):
-    """ Converts the frame to grayscale and applies thresholding to improve OCR accuracy. """
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-    return thresh
+    """ Enhance text clarity for OCR. """
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)  # Convert to grayscale
 
-def extract_card_name(frame):
-    """ Extracts text from the image using Tesseract OCR. """
-    processed = preprocess_image(frame)
-    text = pytesseract.image_to_string(processed, config='--psm 6')  # PSM 6: Assume a single block of text
-    return text.strip()
+    # Apply CLAHE for better contrast
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
 
-def main():
-    cap = cv2.VideoCapture(0)  # Open webcam
+    # Resize the image for better OCR detection
+    enhanced = cv2.resize(enhanced, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    return enhanced
 
-        # Define the region where the card name is expected (adjust as needed)
-        height, width, _ = frame.shape
-        roi = frame[int(height * 0.05):int(height * 0.15), int(width * 0.2):int(width * 0.8)]  # Crop top portion
+def extract_card_name(image):
+    """ Use EasyOCR to detect text in the image. """
+    processed = preprocess_image(image)
 
-        card_name = extract_card_name(roi)
+    # Run EasyOCR
+    results = reader.readtext(processed, detail=0)  # Set detail=0 to return only text
 
-        # Display extracted text
-        cv2.putText(frame, f"Card Name: {card_name}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    if results:
+        return results[0].strip()
+    return "No text detected"
 
-        cv2.imshow("MTG Card Scanner", frame)
+cap = cv2.VideoCapture(0)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
 
-    cap.release()
-    cv2.destroyAllWindows()
+    # Get frame dimensions
+    height, width, _ = frame.shape
 
-if __name__ == "__main__":
-    main()
+    # Define a smaller ROI (center-top section for card name)
+    x1, y1, x2, y2 = int(width * 0.35), int(height * 0.05), int(width * 0.70), int(height * 0.12)
+
+    # Draw ROI boundary on the live feed
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+    # Show the live feed with the overlay
+    cv2.imshow("MTG Card Reader", frame)
+
+    # Handle key events
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord(' '):  # Capture and process image on spacebar press
+        roi = frame[y1:y2, x1:x2]  # Extract the ROI
+        detected_card_name = extract_card_name(roi)  # Process the image
+        print(f"Detected Card Name: {detected_card_name}")  # Print the detected name
+
+        # Overlay detected card name on the live feed (for next frame)
+        cv2.putText(frame, f"Detected: {detected_card_name}", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+    elif key == ord('q'):  # Quit
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+ 
